@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, IntEnum
@@ -111,6 +113,34 @@ LOSS_NON_RETURNABLE_LEFTOVER = "non_returnable_leftover"  # 跨境余料不可�
 # 课程包 / 导师 / 工坊资源 / 材料批次 / 接待窗口
 # ---------------------------------------------------------------------------
 
+#: 参与版本校验和的课程包内容字段（身份/审计字段与冻结元数据不参与）
+PACKAGE_CHECKSUM_FIELDS = (
+    "name",
+    "craft",
+    "duration_minutes",
+    "max_seats",
+    "required_qualifications",
+    "materials",
+)
+
+#: 修订说明事件类型：勘误（冻结后唯一允许的变更）
+REVISION_NOTE_EVENT = "revision_note"
+
+
+def package_content_checksum(data: dict[str, Any]) -> str:
+    """计算课程包内容的 SHA-256 校验和（hexdigest）。
+
+    仅覆盖 :data:`PACKAGE_CHECKSUM_FIELDS` 中的“包内材料/内容”，采用键排序、
+    无空白的规范化 JSON，使同一内容在任何时间、任何后端（内存/SQLite）下结果一致。
+    """
+    canonical = json.dumps(
+        {field: data[field] for field in PACKAGE_CHECKSUM_FIELDS},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
 
 @dataclass(frozen=True)
 class MaterialRequirement:
@@ -127,6 +157,37 @@ class MaterialRequirement:
         return cls(material_id=str(data["material_id"]), quantity_per_seat=float(data["quantity_per_seat"]))
 
 
+@dataclass(frozen=True)
+class RevisionNote:
+    """修订说明事件：冻结后追加，不替换任何原文件/原内容。"""
+
+    note_id: str
+    summary: str
+    detail: str
+    author: str | None
+    created_at: datetime
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "note_id": self.note_id,
+            "type": REVISION_NOTE_EVENT,
+            "summary": self.summary,
+            "detail": self.detail,
+            "author": self.author,
+            "created_at": dt_to_str(self.created_at),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RevisionNote":
+        return cls(
+            note_id=data["note_id"],
+            summary=data["summary"],
+            detail=data.get("detail", ""),
+            author=data.get("author"),
+            created_at=dt_from_str(data["created_at"]),
+        )
+
+
 @dataclass
 class CoursePackage:
     """课程包：一次非遗教学体验的内容定义。"""
@@ -139,12 +200,25 @@ class CoursePackage:
     required_qualifications: list[str]  # 前置培训（导师须持有且在有效期内）
     materials: list[MaterialRequirement]
     created_at: datetime
+    #: 修订说明（含冻结前说明），只追加，永不改写或删除
+    revision_notes: list[RevisionNote] = field(default_factory=list)
+    #: 冻结时写入的校验和；None 表示尚未冻结
+    frozen_checksum: str | None = None
+    frozen_at: datetime | None = None
+
+    @property
+    def frozen(self) -> bool:
+        return self.frozen_checksum is not None
 
     def required_quantity(self, material_id: str, seats: int) -> float:
         for req in self.materials:
             if req.material_id == material_id:
                 return req.quantity_per_seat * seats
         return 0.0
+
+    def content_checksum(self) -> str:
+        """当前包内容的校验和；冻结后应与 :attr:`frozen_checksum` 一致。"""
+        return package_content_checksum(self.to_dict())
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -156,6 +230,9 @@ class CoursePackage:
             "required_qualifications": list(self.required_qualifications),
             "materials": [m.to_dict() for m in self.materials],
             "created_at": dt_to_str(self.created_at),
+            "revision_notes": [n.to_dict() for n in self.revision_notes],
+            "frozen_checksum": self.frozen_checksum,
+            "frozen_at": dt_to_str(self.frozen_at) if self.frozen_at else None,
         }
 
     @classmethod
@@ -169,6 +246,9 @@ class CoursePackage:
             required_qualifications=list(data["required_qualifications"]),
             materials=[MaterialRequirement.from_dict(m) for m in data["materials"]],
             created_at=dt_from_str(data["created_at"]),
+            revision_notes=[RevisionNote.from_dict(n) for n in data.get("revision_notes", [])],
+            frozen_checksum=data.get("frozen_checksum"),
+            frozen_at=dt_from_str(data["frozen_at"]) if data.get("frozen_at") else None,
         )
 
 

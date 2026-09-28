@@ -25,6 +25,7 @@ from ..domain.errors import (
     DomainError,
     IdempotencyConflict,
     NotFoundError,
+    PackageFrozenError,
     StateError,
     ValidationError,
 )
@@ -34,6 +35,7 @@ _ERROR_STATUS = {
     ValidationError.code: 400,
     BusinessRuleError.code: 422,
     StateError.code: 409,
+    PackageFrozenError.code: 409,
     ConflictError.code: 409,
     IdempotencyConflict.code: 409,
 }
@@ -76,15 +78,26 @@ def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
     router.add("POST", "/resources", lambda body, hdr: catalog.create_resource(body))
     router.add("POST", "/material-batches", lambda body, hdr: catalog.create_material_batch(body))
     router.add("POST", "/reception-windows", lambda body, hdr: catalog.create_reception_window(body))
-    router.add("GET", "/packages", lambda body, hdr: {"items": catalog.list(COLLECTION_PACKAGES)})
+    router.add("GET", "/packages", lambda body, hdr: {"items": catalog.list_packages()})
     router.add("GET", "/mentors", lambda body, hdr: {"items": catalog.list(COLLECTION_MENTORS)})
     router.add("GET", "/resources", lambda body, hdr: {"items": catalog.list(COLLECTION_RESOURCES)})
     router.add("GET", "/material-batches", lambda body, hdr: {"items": catalog.list(COLLECTION_BATCHES)})
     router.add("GET", "/reception-windows", lambda body, hdr: {"items": catalog.list(COLLECTION_WINDOWS)})
+    router.add("GET", "/packages/{package_id}", lambda body, hdr: catalog.get_package(hdr["__path__"]["package_id"]))
     router.add(
-        "GET",
+        "POST",
+        "/packages/{package_id}/freeze",
+        lambda body, hdr: catalog.freeze_package(hdr["__path__"]["package_id"], body),
+    )
+    router.add(
+        "POST",
+        "/packages/{package_id}/revision-notes",
+        lambda body, hdr: catalog.add_revision_note(hdr["__path__"]["package_id"], body),
+    )
+    router.add(
+        "PUT",
         "/packages/{package_id}",
-        lambda body, hdr: catalog.get(COLLECTION_PACKAGES, hdr["__path__"]["package_id"]),
+        lambda body, hdr: catalog.update_package(hdr["__path__"]["package_id"], body),
     )
 
     # 预约流程
@@ -191,6 +204,9 @@ def make_handler_class(router: _Router) -> type[BaseHTTPRequestHandler]:
 
         def do_POST(self) -> None:
             self._dispatch("POST")
+
+        def do_PUT(self) -> None:
+            self._dispatch("PUT")
 
     return ApiHandler
 

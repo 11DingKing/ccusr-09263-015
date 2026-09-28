@@ -37,6 +37,10 @@ service_09252_008/
 - **超时恢复**：过期锁定释放库存并晋级候补，过期报价退回待报价；
   服务启动时与 `POST /admin/recover` 均可触发。
 - **时间**：内部一律 UTC；输入接受任意 ISO-8601 偏移（拒绝朴素时间）。
+- **课程包版本冻结**：冻结时对包内内容（名称、门类、时长、席位、前置培训、材料清单）
+  计算规范化 SHA-256 校验和，连同冻结记录写入持久化存储（SQLite 重启后仍可读取）。
+  冻结后只能追加修订说明（`revision_note`，只追加），任何替换原文件/材料的请求都被拒绝
+  （`package_frozen`）；读取时返回冻结校验和与当前内容的完整性比对（`content_intact`）。
 
 ## 运行
 
@@ -51,6 +55,10 @@ python3 -m service_09252_008 --host 127.0.0.1 --port 8080
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/packages` `/mentors` `/resources` `/material-batches` `/reception-windows` | 目录登记 |
+| POST | `/packages/{id}/freeze` | 冻结课程包版本（写入冻结校验和，可携带首条 `revision_note`） |
+| PUT  | `/packages/{id}` | 更新课程包；冻结后只接受 `revision_note` 说明事件，替换内容返回 409 `package_frozen` |
+| POST | `/packages/{id}/revision-notes` | 追加修订说明（只追加，不改动原文件/校验和） |
+| GET  | `/packages/{id}` | 查询；冻结时返回 `frozen_checksum`、`checksum_algorithm`、`content_intact` |
 | POST | `/bookings` | 申请（需幂等键） |
 | POST | `/bookings/{id}/quote` | 报价 |
 | POST | `/bookings/{id}/lock` | 锁定（需幂等键，可带 `ttl_seconds`） |

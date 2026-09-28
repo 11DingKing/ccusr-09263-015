@@ -61,3 +61,15 @@ class BookingImmutableError(StateError):
     """预约已不可变更（材料已发运或流程已终结）。"""
 
     code = "booking_immutable"
+
+
+class PackageFrozenError(StateError):
+    """课程包版本已冻结：原文件不可替换，只能追加修订说明。"""
+
+    code = "package_frozen"
+
+
+class PackageIntegrityError(DomainError):
+    """冻结课程包当前内容与冻结时校验和不一致（原文件疑似被替换/篡改）。"""
+
+    code = "package_integrity_violation"

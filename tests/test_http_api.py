@@ -113,5 +113,83 @@ class HttpApiTests(unittest.TestCase):
         self.assertIn("expired_quotes", body)
 
 
+class PackageFreezeHttpTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        catalog, bookings, clock, store = make_services()
+        cls.ids = seed_catalog(catalog)
+        cls.catalog = catalog
+        cls.server = create_server("127.0.0.1", 0, catalog, bookings)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+
+    def _request(
+        self, method: str, path: str, body: dict | None = None, headers: dict | None = None
+    ) -> tuple[int, dict]:
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{self.port}{path}", data=data, method=method, headers=headers or {}
+        )
+        if data is not None:
+            request.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                return response.status, json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def test_freeze_read_note_and_replace_rejected_over_http(self) -> None:
+        package_id = self.ids["package_id"]
+
+        status, frozen = self._request(
+            "POST", f"/packages/{package_id}/freeze", {"reason": "发版冻结"}
+        )
+        self.assertEqual(status, 200)
+        self.assertIn("frozen_checksum", frozen)
+        self.assertTrue(frozen["integrity_ok"])
+        checksum = frozen["frozen_checksum"]
+
+        # 读取时显示冻结时的校验和
+        status, read = self._request("GET", f"/packages/{package_id}")
+        self.assertEqual(status, 200)
+        self.assertEqual(read["frozen_checksum"], checksum)
+        self.assertEqual(read["current_checksum"], checksum)
+
+        # 替换原文件 -> 409 package_frozen
+        status, rejected = self._request(
+            "POST",
+            f"/packages/{package_id}/updates",
+            {"event_type": "replace", "name": "替换件"},
+        )
+        self.assertEqual(status, 409)
+        self.assertEqual(rejected["error"], "package_frozen")
+
+        # 只接受修订说明事件
+        status, noted = self._request(
+            "POST",
+            f"/packages/{package_id}/updates",
+            {"event_type": "revision_note", "note": "第3页勘误", "author": "教务处"},
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(noted["revision_notes"][0]["note"], "第3页勘误")
+        self.assertEqual(noted["frozen_checksum"], checksum)
+
+        # 未知事件类型 -> 400
+        status, bad = self._request(
+            "POST",
+            f"/packages/{package_id}/updates",
+            {"event_type": "overwrite", "note": "x"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(bad["error"], "validation_error")
+
+
 if __name__ == "__main__":
     unittest.main()

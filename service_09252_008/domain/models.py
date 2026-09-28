@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum, IntEnum
@@ -127,9 +129,36 @@ class MaterialRequirement:
         return cls(material_id=str(data["material_id"]), quantity_per_seat=float(data["quantity_per_seat"]))
 
 
+#: 课程包内容校验和算法（冻结时写入，读取时复核）
+PACKAGE_CHECKSUM_ALGORITHM = "sha256"
+
+
+def package_content_checksum(data: dict[str, Any]) -> str:
+    """计算课程包内容的规范化校验和。
+
+    仅覆盖课程内容字段（名称、门类、时长、席位数、前置培训、材料清单），
+    与登记时间等元数据无关；冻结后追加的修订说明不属于原文件内容。
+    """
+    content = {
+        "package_id": data["package_id"],
+        "name": data["name"],
+        "craft": data["craft"],
+        "duration_minutes": data["duration_minutes"],
+        "max_seats": data["max_seats"],
+        "required_qualifications": list(data["required_qualifications"]),
+        "materials": [dict(m) for m in data["materials"]],
+    }
+    canonical = json.dumps(content, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 @dataclass
 class CoursePackage:
-    """课程包：一次非遗教学体验的内容定义。"""
+    """课程包：一次非遗教学体验的内容定义。
+
+    冻结（版本冻结）后内容字段不可替换，只能追加修订说明；
+    ``frozen_checksum`` 记录冻结时刻的内容校验和，读取时据此复核完整性。
+    """
 
     package_id: str
     name: str
@@ -139,6 +168,17 @@ class CoursePackage:
     required_qualifications: list[str]  # 前置培训（导师须持有且在有效期内）
     materials: list[MaterialRequirement]
     created_at: datetime
+    frozen_at: datetime | None = None  # 冻结时刻（None 表示未冻结）
+    frozen_checksum: str | None = None  # 冻结时的内容校验和
+    revision_notes: list[dict[str, Any]] = field(default_factory=list)  # 只追加的修订说明
+
+    @property
+    def frozen(self) -> bool:
+        return self.frozen_at is not None
+
+    def current_checksum(self) -> str:
+        """当前内容的校验和。"""
+        return package_content_checksum(self.to_dict())
 
     def required_quantity(self, material_id: str, seats: int) -> float:
         for req in self.materials:
@@ -156,6 +196,9 @@ class CoursePackage:
             "required_qualifications": list(self.required_qualifications),
             "materials": [m.to_dict() for m in self.materials],
             "created_at": dt_to_str(self.created_at),
+            "frozen_at": dt_to_str(self.frozen_at) if self.frozen_at else None,
+            "frozen_checksum": self.frozen_checksum,
+            "revision_notes": [dict(note) for note in self.revision_notes],
         }
 
     @classmethod
@@ -169,6 +212,9 @@ class CoursePackage:
             required_qualifications=list(data["required_qualifications"]),
             materials=[MaterialRequirement.from_dict(m) for m in data["materials"]],
             created_at=dt_from_str(data["created_at"]),
+            frozen_at=dt_from_str(data["frozen_at"]) if data.get("frozen_at") else None,
+            frozen_checksum=data.get("frozen_checksum"),
+            revision_notes=[dict(note) for note in data.get("revision_notes", [])],
         )
 
 

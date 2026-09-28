@@ -37,6 +37,12 @@ service_09252_008/
 - **超时恢复**：过期锁定释放库存并晋级候补，过期报价退回待报价；
   服务启动时与 `POST /admin/recover` 均可触发。
 - **时间**：内部一律 UTC；输入接受任意 ISO-8601 偏移（拒绝朴素时间）。
+- **课程包版本冻结**：冻结时对内容字段（名称、门类、时长、席位数、前置培训、材料清单）
+  计算规范化 SHA-256 校验和，与冻结时刻一并写入存储（SQLite 重启后仍在）。
+  冻结后原文件不可替换——更新接口只接受 `revision_note` 修订说明事件（只追加，不改原文件、
+  不变校验和）；`replace`/`replace_file`/`update_content` 等替换事件返回 409 `package_frozen`。
+  读取冻结包时返回 `frozen_checksum` 并复核当前内容，若原文件被外部替换/篡改导致校验和不一致，
+  返回 409 `package_integrity_violation`。
 
 ## 运行
 
@@ -51,6 +57,8 @@ python3 -m service_09252_008 --host 127.0.0.1 --port 8080
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | POST | `/packages` `/mentors` `/resources` `/material-batches` `/reception-windows` | 目录登记 |
+| POST | `/packages/{id}/freeze` | 课程包版本冻结（记录冻结时刻与内容 SHA-256 校验和） |
+| POST | `/packages/{id}/updates` | 冻结包更新：只接受 `revision_note` 修订说明事件，`replace` 等替换事件拒绝（409） |
 | POST | `/bookings` | 申请（需幂等键） |
 | POST | `/bookings/{id}/quote` | 报价 |
 | POST | `/bookings/{id}/lock` | 锁定（需幂等键，可带 `ttl_seconds`） |
@@ -75,7 +83,8 @@ python3 -m unittest discover -s tests -v
 
 覆盖：主流程端到端、前置培训/容量/安全/互斥/运输周期规则、跨时区、
 幂等重放、并发锁定（内存与 SQLite 双后端）、重启后超时恢复、
-部分到货与在途损耗、取消释放候补与损耗记录、HTTP 接口边界。
+部分到货与在途损耗、取消释放候补与损耗记录、
+课程包版本冻结（冻结校验和、说明只追加、替换拒绝、SQLite 落盘、篡改检测）、HTTP 接口边界。
 
 ## 编译检查
 

@@ -25,6 +25,8 @@ from ..domain.errors import (
     DomainError,
     IdempotencyConflict,
     NotFoundError,
+    PackageFrozenError,
+    PackageIntegrityError,
     StateError,
     ValidationError,
 )
@@ -36,6 +38,8 @@ _ERROR_STATUS = {
     StateError.code: 409,
     ConflictError.code: 409,
     IdempotencyConflict.code: 409,
+    PackageFrozenError.code: 409,  # 冻结后替换原文件
+    PackageIntegrityError.code: 409,  # 冻结校验和不匹配
 }
 
 HandlerFn = Callable[[dict[str, Any], dict[str, str]], Any]
@@ -84,7 +88,17 @@ def build_router(catalog: CatalogService, bookings: BookingService) -> _Router:
     router.add(
         "GET",
         "/packages/{package_id}",
-        lambda body, hdr: catalog.get(COLLECTION_PACKAGES, hdr["__path__"]["package_id"]),
+        lambda body, hdr: catalog.get_package(hdr["__path__"]["package_id"]),
+    )
+    router.add(
+        "POST",
+        "/packages/{package_id}/freeze",
+        lambda body, hdr: catalog.freeze_package(hdr["__path__"]["package_id"], body),
+    )
+    router.add(
+        "POST",
+        "/packages/{package_id}/updates",
+        lambda body, hdr: catalog.update_package(hdr["__path__"]["package_id"], body),
     )
 
     # 预约流程
